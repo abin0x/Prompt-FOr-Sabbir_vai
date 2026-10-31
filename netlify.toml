@@ -1,0 +1,10 @@
+# Builds the Dashboard. Every push to main goes live.
+[build]
+  base = "admin-panel"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # These three are meant for the browser, so finding them in the build is fine.
+  SECRETS_SCAN_OMIT_KEYS = "VITE_SUPABASE_URL,VITE_SUPABASE_ANON_KEY,VITE_MEDIA_BASE_URL"

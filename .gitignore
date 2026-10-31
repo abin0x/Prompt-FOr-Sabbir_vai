@@ -1,0 +1,21 @@
+# Secrets
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# Local caches and build output
+.cache/
+node_modules/
+dist/
+Prompt-Lab-demo.apk
+
+# Supabase CLI's local state
+supabase/.temp/
+supabase/.branches/
+
+# Not part of this repository: only the Dashboard and the backend are published
+user-app/
+store/
+design.zip
+README (1).md
