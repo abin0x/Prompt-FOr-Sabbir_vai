@@ -13,7 +13,8 @@ export interface VideoRow {
   content_type: ContentType;
   category_id: string | null;
   tags: string[];
-  media_path: string;
+  /** Null for a draft that is waiting for its file. */
+  media_path: string | null;
   thumb_path: string | null;
   duration_sec: number | null;
   is_published: boolean;
@@ -25,6 +26,8 @@ export interface VideoRow {
   generate_count: number;
   copy_count: number;
   has_prompt: boolean;
+  /** The name of the file it was uploaded from, used to match a sheet's rows. */
+  source_name: string | null;
   created_at: string;
 }
 
@@ -33,7 +36,8 @@ export interface VideoInput {
   contentType: ContentType;
   categoryId: string | null;
   tags: string[];
-  mediaPath: string;
+  /** Null only while the item stays hidden. */
+  mediaPath: string | null;
   thumbPath: string | null;
   durationSec: number | null;
   promptText: string;
@@ -41,6 +45,41 @@ export interface VideoInput {
   /** Null keeps the size already saved. */
   mediaBytes: number | null;
   publishAt: string | null;
+  /** Null keeps the name already saved. */
+  sourceName?: string | null;
+}
+
+/**
+ * One row for importItems. With an id it updates that item and changes only the
+ * fields given; without one it creates a hidden item.
+ */
+export interface ImportItem {
+  id?: string;
+  title?: string;
+  contentType?: ContentType;
+  categoryId?: string | null;
+  tags?: string[];
+  prompt?: string;
+  mediaPath?: string;
+  thumbPath?: string | null;
+  durationSec?: number | null;
+  mediaBytes?: number;
+  sourceName?: string;
+  /** Also put it live. Needs a file and a prompt. */
+  publish?: boolean;
+}
+
+/** One per row sent, in the same order. */
+export type ImportResult = { id: string; error?: undefined } | { id?: undefined; error: string };
+
+/** An item whose original file name matched. */
+export interface SourceMatch {
+  source_name: string;
+  id: string;
+  title: string;
+  has_media: boolean;
+  has_prompt: boolean;
+  is_published: boolean;
 }
 
 export type UploadKind = "video" | "image" | "thumb";
@@ -50,7 +89,14 @@ export type VideoSort = "newest" | "oldest" | "most_viewed" | "title";
 export interface VideoQuery {
   search: string;
   contentType: ContentType | "all";
-  status: "all" | "published" | "scheduled" | "hidden" | "pinned" | "no_prompt";
+  status:
+    | "all"
+    | "published"
+    | "scheduled"
+    | "hidden"
+    | "pinned"
+    | "no_prompt"
+    | "no_media";
   categoryId: string;
   sort: VideoSort;
   page: number;
@@ -65,6 +111,8 @@ export interface Overview {
   videos: number;
   images: number;
   no_thumb: number;
+  /** Drafts still waiting for their file. */
+  no_media: number;
   no_category: number;
   no_views: number;
   no_prompt: number;
@@ -214,6 +262,10 @@ export interface Api {
   setPublished(ids: string[], published: boolean): Promise<void>;
   setFeatured(id: string, featured: boolean): Promise<void>;
   deleteVideo(id: string): Promise<{ filesRemoved: boolean }>;
+  /** Items saved from these file names, newest first. Ignores case. */
+  matchSourceNames(names: string[]): Promise<SourceMatch[]>;
+  /** Saves any number of rows; each succeeds or fails on its own. */
+  importItems(items: ImportItem[]): Promise<ImportResult[]>;
 
   uploadFile(
     file: Blob,

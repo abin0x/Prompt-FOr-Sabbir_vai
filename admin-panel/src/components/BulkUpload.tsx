@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { Alert } from "./ui";
-import type { Api, Category } from "../lib/api";
+import type { Api, Category, SourceMatch } from "../lib/api";
 import {
   IMAGE_TYPES,
   prepareFile,
@@ -11,6 +11,7 @@ import {
 } from "../lib/media";
 
 type Status = "waiting" | "uploading" | "done" | "failed";
+type Outcome = "new" | "draft" | "published";
 
 interface Entry {
   file: File;
@@ -18,6 +19,10 @@ interface Entry {
   status: Status;
   progress: number;
   message: string;
+  /** A draft saved from a sheet under this file name, still waiting for its file. */
+  draft: SourceMatch | null;
+  /** An item made from a file with this name already has its file. */
+  uploadedBefore: boolean;
 }
 
 const STATUS_TEXT: Record<Status, string> = {
@@ -27,9 +32,20 @@ const STATUS_TEXT: Record<Status, string> = {
   failed: "Failed",
 };
 
+const DONE_TEXT: Record<Outcome, string> = {
+  new: "Saved as hidden",
+  draft: "Added to its draft",
+  published: "Added to its draft and published",
+};
+
+function plural(n: number, one: string, many: string) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 /**
- * Uploads many files in one go. Each becomes a hidden item titled from its file
- * name, ready to get a prompt and be published from the Library.
+ * Uploads many files in one go. A file named in an imported sheet goes into
+ * that row's draft; any other file becomes a hidden item titled from its name,
+ * ready to get a prompt and be published from the Library.
  */
 export function BulkUpload({
   api,
@@ -40,11 +56,13 @@ export function BulkUpload({
   api: Api;
   categories: Category[];
   onClose: () => void;
-  onFinished: (saved: number) => Promise<void>;
+  onFinished: (message: string) => Promise<void>;
 }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [categoryId, setCategoryId] = useState("");
+  const [publishDrafts, setPublishDrafts] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [checking, setChecking] = useState(0);
   const [running, setRunning] = useState(false);
   const [finished, setFinished] = useState(false);
   const [error, setError] = useState("");
@@ -58,17 +76,62 @@ export function BulkUpload({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, running]);
 
-  const addFiles = (files: File[]) => {
+  const addFiles = async (files: File[]) => {
     const added: Entry[] = [];
     const rejected: string[] = [];
+    // Names decide which draft a file goes into, so each may appear once.
+    const names = new Set(entries.map((entry) => entry.file.name.toLowerCase()));
     for (const file of files) {
       const type: ContentType = IMAGE_TYPES.includes(file.type) ? "image" : "video";
       const problem = validateFile(file, type);
+      const key = file.name.toLowerCase();
       if (problem) rejected.push(`${file.name}: ${problem}`);
-      else added.push({ file, type, status: "waiting", progress: 0, message: "" });
+      else if (names.has(key)) rejected.push(`${file.name}: already in the list.`);
+      else {
+        names.add(key);
+        added.push({
+          file,
+          type,
+          status: "waiting",
+          progress: 0,
+          message: "",
+          draft: null,
+          uploadedBefore: false,
+        });
+      }
     }
     setEntries((current) => [...current, ...added]);
     setError(rejected.join(" "));
+    if (added.length === 0) return;
+
+    setChecking((n) => n + 1);
+    try {
+      const matches = await api.matchSourceNames(added.map((entry) => entry.file.name));
+      // Newest first, so the first match for a name is the one that counts.
+      const byName = new Map<string, SourceMatch>();
+      for (const match of matches) {
+        const key = match.source_name.toLowerCase();
+        if (!byName.has(key)) byName.set(key, match);
+      }
+      const addedFiles = new Set(added.map((entry) => entry.file));
+      setEntries((current) =>
+        current.map((entry) => {
+          if (!addedFiles.has(entry.file)) return entry;
+          const match = byName.get(entry.file.name.toLowerCase());
+          return {
+            ...entry,
+            draft: match && !match.has_media ? match : null,
+            uploadedBefore: Boolean(match?.has_media),
+          };
+        }),
+      );
+    } catch (err) {
+      setError(
+        `Could not check for drafts waiting for these files, so each will be a new item. ${(err as Error).message}`,
+      );
+    } finally {
+      setChecking((n) => n - 1);
+    }
   };
 
   const update = (index: number, change: Partial<Entry>) =>
@@ -76,7 +139,7 @@ export function BulkUpload({
       current.map((entry, i) => (i === index ? { ...entry, ...change } : entry)),
     );
 
-  const uploadOne = async (entry: Entry, index: number) => {
+  const uploadOne = async (entry: Entry, index: number): Promise<Outcome | null> => {
     const uploaded: string[] = [];
     try {
       const prepared = await prepareFile(entry.file, entry.type);
@@ -92,45 +155,74 @@ export function BulkUpload({
         update(index, { progress: fileWeight + f * (1 - fileWeight) }),
       );
       uploaded.push(thumbPath);
-      await api.saveVideo(null, {
-        title: titleFromFileName(entry.file.name) || "Untitled",
-        contentType: entry.type,
-        categoryId: categoryId || null,
-        tags: [],
-        mediaPath,
-        thumbPath,
-        durationSec: prepared.durationSec,
-        promptText: "",
-        isPublished: false,
-        mediaBytes: prepared.file.size,
-        publishAt: null,
-      });
-      update(index, { status: "done", progress: 1 });
-      return true;
+
+      let outcome: Outcome = "new";
+      if (entry.draft) {
+        const publish = publishDrafts && entry.draft.has_prompt;
+        const [result] = await api.importItems([
+          {
+            id: entry.draft.id,
+            contentType: entry.type,
+            mediaPath,
+            thumbPath,
+            durationSec: prepared.durationSec,
+            mediaBytes: prepared.file.size,
+            publish: publish || undefined,
+          },
+        ]);
+        if (!result || result.error != null) throw new Error(result?.error ?? "Not saved.");
+        outcome = publish ? "published" : "draft";
+      } else {
+        await api.saveVideo(null, {
+          title: titleFromFileName(entry.file.name) || "Untitled",
+          contentType: entry.type,
+          categoryId: categoryId || null,
+          tags: [],
+          mediaPath,
+          thumbPath,
+          durationSec: prepared.durationSec,
+          promptText: "",
+          isPublished: false,
+          mediaBytes: prepared.file.size,
+          publishAt: null,
+          // Lets a sheet imported later fill in this item's prompt by file name.
+          sourceName: entry.file.name,
+        });
+      }
+      update(index, { status: "done", progress: 1, message: DONE_TEXT[outcome] });
+      return outcome;
     } catch (err) {
       await api.discardUploads(uploaded).catch(() => undefined);
       update(index, { status: "failed", message: (err as Error).message });
-      return false;
+      return null;
     }
   };
 
   const start = async () => {
     setRunning(true);
     setError("");
-    let saved = 0;
+    const counts: Record<Outcome, number> = { new: 0, draft: 0, published: 0 };
     // One at a time: a home connection handles this better than many at once.
     for (const [index, entry] of entries.entries()) {
       if (entry.status === "done") continue;
       update(index, { status: "uploading", progress: 0, message: "" });
-      if (await uploadOne(entry, index)) saved++;
+      const outcome = await uploadOne(entry, index);
+      if (outcome) counts[outcome]++;
     }
     setRunning(false);
     setFinished(true);
-    if (saved > 0) await onFinished(saved);
+    const parts = [
+      counts.new && `${plural(counts.new, "item", "items")} saved as hidden`,
+      counts.draft && `${plural(counts.draft, "file", "files")} added to drafts`,
+      counts.published && `${plural(counts.published, "draft", "drafts")} published`,
+    ].filter(Boolean);
+    if (parts.length > 0) await onFinished(`${parts.join(", ")}.`);
   };
 
   const pending = entries.filter((entry) => entry.status !== "done").length;
   const done = entries.length - pending;
+  const drafts = entries.filter((entry) => entry.draft).length;
+  const draftsWithPrompt = entries.filter((entry) => entry.draft?.has_prompt).length;
 
   return (
     <div
@@ -158,13 +250,17 @@ export function BulkUpload({
             Each file is saved as a hidden item titled from its file name. Add the
             prompts later from the Library (filter by "No prompt"), then publish.
           </p>
+          <p className="muted small">
+            Imported a sheet first? A file with the same name as a row goes into that
+            row's draft, with its title and prompt.
+          </p>
 
           <div
             className="drop"
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
-              if (!running) addFiles([...e.dataTransfer.files]);
+              if (!running) void addFiles([...e.dataTransfer.files]);
             }}
           >
             <div>
@@ -188,13 +284,13 @@ export function BulkUpload({
               onChange={(e) => {
                 const files = [...(e.target.files ?? [])];
                 e.target.value = "";
-                addFiles(files);
+                void addFiles(files);
               }}
             />
           </div>
 
           <label className="field">
-            <span>Category for all of them</span>
+            <span>{drafts > 0 ? "Category for the new items" : "Category for all of them"}</span>
             <select
               value={categoryId}
               onChange={(e) => setCategoryId(e.target.value)}
@@ -210,6 +306,21 @@ export function BulkUpload({
             </select>
           </label>
 
+          {draftsWithPrompt > 0 && (
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={publishDrafts}
+                onChange={(e) => setPublishDrafts(e.target.checked)}
+                disabled={running}
+              />
+              <span>
+                Publish the {plural(draftsWithPrompt, "draft that already has", "drafts that already have")}{" "}
+                a prompt. New items stay hidden.
+              </span>
+            </label>
+          )}
+
           {entries.length > 0 && (
             <ul className="bulk-list">
               {entries.map((entry, index) => (
@@ -217,6 +328,17 @@ export function BulkUpload({
                   <Icon name={entry.type} size={15} />
                   <div className="bulk-file">
                     <strong>{entry.file.name}</strong>
+                    {entry.draft && (
+                      <span className="muted small">
+                        Goes into the draft "{entry.draft.title}"
+                        {entry.draft.has_prompt ? "" : ", which has no prompt yet"}
+                      </span>
+                    )}
+                    {entry.uploadedBefore && entry.status === "waiting" && (
+                      <span className="small warn-text">
+                        A file with this name was uploaded before. This adds another item.
+                      </span>
+                    )}
                     <span
                       className={
                         entry.status === "failed" ? "field-error" : "muted small"
@@ -266,7 +388,7 @@ export function BulkUpload({
             <Alert kind={pending ? "warn" : "info"}>
               {pending
                 ? `${done} saved, ${pending} failed. Start again to retry the failed files.`
-                : `All ${done} saved as hidden.`}
+                : `All ${done} saved.`}
             </Alert>
           )}
         </div>
@@ -275,14 +397,16 @@ export function BulkUpload({
           <button
             type="button"
             className="button primary wide"
-            disabled={running || pending === 0 || !confirmed}
+            disabled={running || checking > 0 || pending === 0 || !confirmed}
             onClick={() => void start()}
           >
             {running
               ? `Uploading ${done + 1} of ${entries.length}`
-              : pending
-                ? `Upload ${pending} ${pending === 1 ? "file" : "files"}`
-                : "Upload"}
+              : checking > 0
+                ? "Checking for drafts..."
+                : pending
+                  ? `Upload ${plural(pending, "file", "files")}`
+                  : "Upload"}
           </button>
         </div>
       </div>

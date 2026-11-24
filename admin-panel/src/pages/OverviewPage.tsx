@@ -128,6 +128,13 @@ export function OverviewPage({
         severity: "warn",
       });
     }
+    if (data.no_media > 0) {
+      issues.push({
+        label: `${data.no_media} ${data.no_media === 1 ? "draft needs" : "drafts need"} an image or video`,
+        page: "library",
+        severity: "warn",
+      });
+    }
     if (data.no_category > 0) {
       issues.push({
         label: `${data.no_category} ${data.no_category === 1 ? "item has" : "items have"} no category`,

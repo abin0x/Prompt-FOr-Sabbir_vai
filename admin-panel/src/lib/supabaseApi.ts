@@ -5,22 +5,37 @@ import type {
   Category,
   ConfigMap,
   ContentReport,
+  ImportItem,
+  ImportResult,
   Overview,
+  SourceMatch,
   UploadKind,
   VideoQuery,
   VideoRow,
 } from "./api";
 
 const VIDEO_COLUMNS =
-  "id,title,content_type,category_id,tags,media_path,thumb_path,duration_sec,is_published,is_featured,view_count,media_bytes,publish_at,generate_count,copy_count,created_at,prompts(video_id)";
+  "id,title,content_type,category_id,tags,media_path,thumb_path,duration_sec,is_published,is_featured,view_count,media_bytes,publish_at,generate_count,copy_count,source_name,created_at,prompts(video_id)";
 
 type FetchedRow = Omit<VideoRow, "has_prompt"> & { prompts: unknown };
 
 function friendlyError(message: string): string {
-  return message.includes("prompt_missing")
-    ? "Add a prompt before publishing. Items with no prompt can only stay hidden."
-    : message;
+  if (message.includes("prompt_missing")) {
+    return "Add a prompt before publishing. Items with no prompt can only stay hidden.";
+  }
+  if (message.includes("media_missing") || message.includes("videos_live_needs_media")) {
+    return "Add an image or video before publishing. Items with no file can only stay hidden.";
+  }
+  if (message.includes("not_found")) return "This item no longer exists.";
+  if (/violates check constraint "videos_title_check"/.test(message)) {
+    return "The title must be 1 to 120 characters.";
+  }
+  if (message.includes("invalid input syntax")) return "A value in this row is not valid.";
+  return message;
 }
+
+/** Rows per import request; the database accepts up to 200. */
+const IMPORT_BATCH = 100;
 
 function friendlyAuthError(message: string): string {
   if (/invalid login/i.test(message)) return "Wrong email or password.";
@@ -125,6 +140,8 @@ export function createSupabaseApi(
         request = request.eq("is_featured", true);
       } else if (query.status === "no_prompt") {
         request = request.is("prompts", null);
+      } else if (query.status === "no_media") {
+        request = request.is("media_path", null);
       } else if (query.status === "hidden") {
         request = request.eq("is_published", false);
       } else if (query.status === "scheduled") {
@@ -174,6 +191,7 @@ export function createSupabaseApi(
         p_is_published: input.isPublished,
         p_media_bytes: input.mediaBytes,
         p_publish_at: input.publishAt,
+        p_source_name: input.sourceName ?? null,
       });
       if (error) throw new Error(friendlyError(error.message));
       return data as string;
@@ -199,6 +217,55 @@ export function createSupabaseApi(
       });
       if (error) throw await functionError(error, "Could not delete this item.");
       return { filesRemoved: Boolean(data?.filesRemoved) };
+    },
+
+    async matchSourceNames(names) {
+      const unique = [...new Set(names.filter(Boolean))];
+      const found: SourceMatch[] = [];
+      for (let i = 0; i < unique.length; i += 500) {
+        const { data, error } = await db.rpc("match_source_names", {
+          p_names: unique.slice(i, i + 500),
+        });
+        if (error) throw new Error(error.message);
+        found.push(...((data ?? []) as SourceMatch[]));
+      }
+      return found;
+    },
+    async importItems(items: ImportItem[]) {
+      const results: ImportResult[] = [];
+      for (let i = 0; i < items.length; i += IMPORT_BATCH) {
+        // Keys left undefined are dropped by JSON, so an update changes only
+        // the fields given. Null is kept and clears a field.
+        const rows = items.slice(i, i + IMPORT_BATCH).map((item) => ({
+          id: item.id,
+          title: item.title,
+          content_type: item.contentType,
+          category_id: item.categoryId,
+          tags: item.tags,
+          prompt: item.prompt,
+          media_path: item.mediaPath,
+          thumb_path: item.thumbPath,
+          duration_sec: item.durationSec,
+          media_bytes: item.mediaBytes,
+          source_name: item.sourceName,
+          publish: item.publish,
+        }));
+        const { data, error } = await db.rpc("import_items", { p_items: rows });
+        if (error) {
+          // Earlier batches are already saved, so report this one row by row.
+          const message = friendlyError(error.message);
+          results.push(...rows.map(() => ({ error: message })));
+          continue;
+        }
+        for (const result of (data ?? []) as { id?: string; error?: string }[]) {
+          results.push(
+            result.id
+              ? { id: result.id }
+              : { error: friendlyError(result.error ?? "Not saved.") },
+          );
+        }
+      }
+      return results;
     },
 
     async uploadFile(file, kind: UploadKind, contentType, onProgress) {

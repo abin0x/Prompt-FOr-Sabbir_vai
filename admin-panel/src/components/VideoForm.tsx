@@ -30,6 +30,8 @@ function toLocalInput(iso: string): string {
 
 interface Prepared {
   file: File;
+  /** The chosen file's own name, kept so a sheet can find the item by it. */
+  sourceName: string;
   thumb: Blob;
   thumbUrl: string;
   /** Empty for images. */
@@ -52,6 +54,8 @@ export function VideoForm({
   onSaved: (message: string) => Promise<void>;
 }) {
   const isEdit = row != null;
+  /** An item saved from a sheet or as a draft may have no file yet. */
+  const savedFile = row?.media_path ?? null;
   const [contentType, setContentType] = useState<ContentType>(
     row?.content_type ?? "video",
   );
@@ -131,6 +135,7 @@ export function VideoForm({
       setFrameBusy(false);
       setPrepared({
         ...ready,
+        sourceName: file.name,
         thumbUrl: URL.createObjectURL(ready.thumb),
         videoUrl: contentType === "video" ? URL.createObjectURL(ready.file) : "",
       });
@@ -158,8 +163,10 @@ export function VideoForm({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError("");
-    if (!isEdit && !prepared) {
-      setError(`Choose a ${contentType} file first.`);
+    if (!prepared && !savedFile && when !== "hidden") {
+      setError(
+        `Choose a ${contentType} file first, or choose Keep hidden to save a draft and add the file later.`,
+      );
       return;
     }
     if (when !== "hidden" && !prompt.trim()) {
@@ -175,7 +182,7 @@ export function VideoForm({
     const uploaded: string[] = [];
     setProgress(0);
     try {
-      let mediaPath = row?.media_path ?? "";
+      let mediaPath = savedFile;
       let thumbPath = row?.thumb_path ?? null;
       let durationSec = row?.duration_sec ?? null;
       let mediaBytes: number | null = null;
@@ -212,6 +219,8 @@ export function VideoForm({
         isPublished: when !== "hidden",
         mediaBytes,
         publishAt: scheduledFor?.toISOString() ?? null,
+        // Kept once set, so a replaced file does not break a sheet's match.
+        sourceName: prepared && !row?.source_name ? prepared.sourceName : null,
       });
 
       // A replaced file is no longer used by anything.
@@ -239,8 +248,10 @@ export function VideoForm({
 
   const previewUrl =
     prepared?.thumbUrl ?? (row?.thumb_path ? api.mediaUrl(row.thumb_path) : null);
-  const canPlay = Boolean(row && !prepared && row.media_path.endsWith(".mp4"));
-  const framesFrom = prepared?.videoUrl || (row ? api.mediaUrl(row.media_path) : "");
+  const canPlay = Boolean(!prepared && savedFile?.endsWith(".mp4"));
+  const framesFrom = prepared?.videoUrl || (savedFile ? api.mediaUrl(savedFile) : "");
+  // The type can change until the item has a file.
+  const canSwitchType = !isEdit || !savedFile;
 
   return (
     <div
@@ -270,7 +281,7 @@ export function VideoForm({
         </div>
 
         <div className="drawer-body">
-          {!isEdit && (
+          {canSwitchType && (
             <div className="segmented wide" role="group" aria-label="Type">
               {(["video", "image"] as const).map((type) => (
                 <button
@@ -287,10 +298,10 @@ export function VideoForm({
             </div>
           )}
 
-          {canPlay && row && (
+          {canPlay && savedFile && (
             <video
               className="media-preview"
-              src={api.mediaUrl(row.media_path)}
+              src={api.mediaUrl(savedFile)}
               poster={previewUrl ?? undefined}
               controls
               preload="none"
@@ -314,9 +325,9 @@ export function VideoForm({
                   ? "Reading the file..."
                   : prepared
                     ? `${prepared.file.name} (${formatBytes(prepared.file.size)})`
-                    : isEdit
+                    : savedFile
                       ? "Keep the current file, or replace it."
-                      : `Drop a ${contentType === "video" ? "video (MP4)" : "image (JPG, PNG, WebP)"} here.`}
+                      : `${isEdit ? "This draft has no file yet. " : ""}Drop a ${contentType === "video" ? "video (MP4)" : "image (JPG, PNG, WebP)"} here.`}
               </p>
               <button
                 type="button"
@@ -324,7 +335,7 @@ export function VideoForm({
                 onClick={() => inputRef.current?.click()}
                 disabled={saving || reading}
               >
-                {prepared || isEdit ? "Choose another file" : "Choose a file"}
+                {prepared || savedFile ? "Choose another file" : "Choose a file"}
               </button>
             </div>
             <input
@@ -500,7 +511,9 @@ export function VideoForm({
                   ? "Upload and publish"
                   : when === "scheduled"
                     ? "Upload and schedule"
-                    : "Upload as hidden"}
+                    : prepared
+                      ? "Upload as hidden"
+                      : "Save draft without a file"}
           </button>
         </div>
       </form>

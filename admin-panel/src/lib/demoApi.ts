@@ -7,6 +7,7 @@ import type {
   ChecklistState,
   ConfigMap,
   ContentReport,
+  ImportResult,
   Overview,
   VideoInput,
   VideoRow,
@@ -47,9 +48,15 @@ function makeRow(
     generate_count: Math.round(views / 4),
     copy_count: Math.round(views / 7),
     has_prompt: true,
+    source_name: null,
     created_at: new Date(Date.UTC(2026, 9, 30 - n)).toISOString(),
   };
 }
+
+const NO_PROMPT =
+  "Add a prompt before publishing. Items with no prompt can only stay hidden.";
+const NO_FILE =
+  "Add an image or video before publishing. Items with no file can only stay hidden.";
 
 const DAILY_SAMPLE = [
   410, 520, 480, 610, 740, 690, 820, 780, 910, 1040, 980, 1160, 1090, 1240,
@@ -211,7 +218,8 @@ export function createDemoApi(): Api {
         hidden: rows.filter((row) => !row.is_published).length,
         videos: rows.filter((row) => row.content_type === "video").length,
         images: rows.filter((row) => row.content_type === "image").length,
-        no_thumb: rows.filter((row) => !row.thumb_path).length,
+        no_thumb: rows.filter((row) => row.media_path && !row.thumb_path).length,
+        no_media: rows.filter((row) => !row.media_path).length,
         no_category: rows.filter((row) => !row.category_id).length,
         no_views: live.filter((row) => row.view_count === 0).length,
         no_prompt: rows.filter((row) => !row.has_prompt).length,
@@ -284,6 +292,7 @@ export function createDemoApi(): Api {
           if (query.status === "all") return true;
           if (query.status === "pinned") return row.is_featured;
           if (query.status === "no_prompt") return !row.has_prompt;
+          if (query.status === "no_media") return !row.media_path;
           if (query.status === "published") return itemStatus(row) === "live";
           return itemStatus(row) === query.status;
         })
@@ -309,11 +318,8 @@ export function createDemoApi(): Api {
     },
     async saveVideo(id, input: VideoInput) {
       await wait();
-      if (input.isPublished && !input.promptText.trim()) {
-        throw new Error(
-          "Add a prompt before publishing. Items with no prompt can only stay hidden.",
-        );
-      }
+      if (input.isPublished && !input.mediaPath) throw new Error(NO_FILE);
+      if (input.isPublished && !input.promptText.trim()) throw new Error(NO_PROMPT);
       const savedId = id ?? `demo-${nextId++}`;
       const existing = rows.find((row) => row.id === savedId);
       const row: VideoRow = {
@@ -333,6 +339,7 @@ export function createDemoApi(): Api {
         generate_count: existing?.generate_count ?? 0,
         copy_count: existing?.copy_count ?? 0,
         has_prompt: input.promptText.trim() !== "",
+        source_name: input.sourceName ?? existing?.source_name ?? null,
         created_at: existing?.created_at ?? new Date().toISOString(),
       };
       if (existing) rows[rows.indexOf(existing)] = row;
@@ -346,12 +353,9 @@ export function createDemoApi(): Api {
       return savedId;
     },
     async setPublished(ids, published) {
-      const missing = rows.some((r) => ids.includes(r.id) && published && !r.has_prompt);
-      if (missing) {
-        throw new Error(
-          "Add a prompt before publishing. Items with no prompt can only stay hidden.",
-        );
-      }
+      const chosen = rows.filter((r) => ids.includes(r.id));
+      if (published && chosen.some((r) => !r.media_path)) throw new Error(NO_FILE);
+      if (published && chosen.some((r) => !r.has_prompt)) throw new Error(NO_PROMPT);
       for (const row of rows) {
         if (ids.includes(row.id)) {
           row.is_published = published;
@@ -377,6 +381,72 @@ export function createDemoApi(): Api {
         if (reports[i].video_id === id) reports.splice(i, 1);
       }
       return { filesRemoved: true };
+    },
+
+    async matchSourceNames(names) {
+      await wait();
+      const wanted = new Set(names.map((name) => name.toLowerCase()));
+      return rows
+        .filter((row) => row.source_name && wanted.has(row.source_name.toLowerCase()))
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        .map((row) => ({
+          source_name: row.source_name!,
+          id: row.id,
+          title: row.title,
+          has_media: Boolean(row.media_path),
+          has_prompt: row.has_prompt,
+          is_published: row.is_published,
+        }));
+    },
+    async importItems(items) {
+      await wait();
+      return items.map((item): ImportResult => {
+        const existing = item.id ? rows.find((row) => row.id === item.id) : undefined;
+        if (item.id && !existing) return { error: "This item no longer exists." };
+        const prompt = item.prompt?.trim() || "";
+        const hasPrompt = Boolean(prompt) || Boolean(existing?.has_prompt);
+        const mediaPath = item.mediaPath ?? existing?.media_path ?? null;
+        if (item.publish && !mediaPath) return { error: NO_FILE };
+        if (item.publish && !hasPrompt) return { error: NO_PROMPT };
+        const title = item.title ?? existing?.title ?? "";
+        if (!title.trim() || title.length > 120) {
+          return { error: "The title must be 1 to 120 characters." };
+        }
+        const row: VideoRow = existing ?? {
+          ...makeRow(nextId, title, item.contentType ?? "image", "", "Trending", 0, false),
+          id: `demo-${nextId++}`,
+          category_id: null,
+          tags: [],
+          media_path: null,
+          thumb_path: null,
+          duration_sec: null,
+          media_bytes: null,
+          generate_count: 0,
+          copy_count: 0,
+          has_prompt: false,
+          created_at: new Date().toISOString(),
+        };
+        row.title = title;
+        if (item.contentType) row.content_type = item.contentType;
+        if (item.categoryId !== undefined) row.category_id = item.categoryId;
+        if (item.tags) row.tags = item.tags;
+        if (item.mediaPath !== undefined) row.media_path = item.mediaPath;
+        if (item.thumbPath !== undefined) row.thumb_path = item.thumbPath;
+        if (item.durationSec !== undefined) row.duration_sec = item.durationSec;
+        if (item.mediaBytes !== undefined) row.media_bytes = item.mediaBytes;
+        if (item.sourceName !== undefined) row.source_name = item.sourceName;
+        if (prompt) {
+          prompts.set(row.id, prompt);
+          row.has_prompt = true;
+        }
+        if (item.publish) {
+          row.is_published = true;
+          row.publish_at = null;
+        }
+        if (!existing) rows.unshift(row);
+        log(existing ? "edited" : "created", "videos", row.title);
+        return { id: row.id };
+      });
     },
 
     async uploadFile(file, _kind, _contentType, onProgress) {

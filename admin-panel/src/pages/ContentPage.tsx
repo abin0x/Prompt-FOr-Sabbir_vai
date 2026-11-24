@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "../components/Icon";
 import { Alert, Card, PageHeader, useFeedback } from "../components/ui";
 import { BulkUpload } from "../components/BulkUpload";
+import { SheetImport } from "../components/SheetImport";
 import { VideoForm } from "../components/VideoForm";
 import type { Api, Category, VideoQuery, VideoRow, VideoSort } from "../lib/api";
 import {
@@ -45,6 +46,7 @@ export function ContentPage({
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<Editing>({ mode: "closed" });
   const [bulk, setBulk] = useState(false);
+  const [sheet, setSheet] = useState(false);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -217,8 +219,30 @@ export function ContentPage({
     );
   };
 
-  const noPromptBadge = (row: VideoRow) =>
-    !row.has_prompt && <span className="badge warn">No prompt</span>;
+  const missingBadges = (row: VideoRow) => (
+    <>
+      {!row.media_path && <span className="badge warn">No file</span>}
+      {!row.has_prompt && <span className="badge warn">No prompt</span>}
+    </>
+  );
+
+  /** Only items with a file and a prompt can go live, so the rest are left out. */
+  const publishSelected = () => {
+    const ready = selectedRows.filter((row) => row.media_path && row.has_prompt);
+    const skipped = selectedRows.length - ready.length;
+    if (ready.length === 0) {
+      toast("None of these can go live yet. Each needs a file and a prompt.", "error");
+      return;
+    }
+    void setPublished(
+      ready.map((row) => row.id),
+      true,
+      `${ready.length} ${ready.length === 1 ? "item is" : "items are"} live.` +
+        (skipped
+          ? ` ${skipped} ${skipped === 1 ? "was" : "were"} left hidden because ${skipped === 1 ? "it has" : "they have"} no file or no prompt.`
+          : ""),
+    );
+  };
 
   const pinButton = (row: VideoRow) => (
     <button
@@ -279,6 +303,10 @@ export function ContentPage({
         description={`${total} ${total === 1 ? "item" : "items"}`}
         actions={
           <>
+            <button className="button" onClick={() => setSheet(true)}>
+              <Icon name="rows" size={16} />
+              Import sheet
+            </button>
             <button className="button" onClick={() => setBulk(true)}>
               <Icon name="upload" size={16} />
               Bulk upload
@@ -336,6 +364,7 @@ export function ContentPage({
             <option value="scheduled">Scheduled</option>
             <option value="hidden">Hidden</option>
             <option value="no_prompt">No prompt</option>
+            <option value="no_media">No file</option>
             <option value="pinned">Pinned</option>
           </select>
           <select
@@ -396,9 +425,7 @@ export function ContentPage({
             <button
               className="button small"
               disabled={busy}
-              onClick={() =>
-                setPublished([...selected], true, `${selected.size} items are live.`)
-              }
+              onClick={publishSelected}
             >
               Publish
             </button>
@@ -479,9 +506,11 @@ export function ContentPage({
                           </button>
                           <span className="muted small item-meta">
                             <Icon name={row.content_type} size={12} />
-                            {row.content_type === "video"
-                              ? `Video ${formatDuration(row.duration_sec)}`
-                              : "Image"}
+                            {!row.media_path
+                              ? `${row.content_type === "video" ? "Video" : "Image"}, no file yet`
+                              : row.content_type === "video"
+                                ? `Video ${formatDuration(row.duration_sec)}`
+                                : "Image"}
                           </span>
                         </div>
                       </div>
@@ -496,7 +525,7 @@ export function ContentPage({
                     <td>
                       <div className="badge-row">
                         {statusBadge(row)}
-                        {noPromptBadge(row)}
+                        {missingBadges(row)}
                       </div>
                     </td>
                     <td className="muted nowrap">
@@ -552,7 +581,7 @@ export function ContentPage({
                     {categoryName(row.category_id)} · {formatCount(row.view_count)} views ·{" "}
                     {formatCount(row.generate_count)} generated
                   </span>
-                  {noPromptBadge(row)}
+                  <div className="badge-row">{missingBadges(row)}</div>
                 </div>
                 <div className="media-actions">
                   {pinButton(row)}
@@ -605,8 +634,20 @@ export function ContentPage({
           api={api}
           categories={categories}
           onClose={() => setBulk(false)}
-          onFinished={async (saved) => {
-            toast(`${saved} ${saved === 1 ? "item" : "items"} saved as hidden. Add prompts, then publish.`);
+          onFinished={async (message) => {
+            toast(message);
+            await load();
+          }}
+        />
+      )}
+
+      {sheet && (
+        <SheetImport
+          api={api}
+          categories={categories}
+          onClose={() => setSheet(false)}
+          onFinished={async (message) => {
+            toast(message);
             await load();
           }}
         />

@@ -1900,3 +1900,27 @@ input:disabled + .toggle {
 .ad-units[open] summary::after {
   transform: rotate(-135deg);
 }
+
+/* Sheet import */
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.plain-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.one-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.warn-text {
+  color: var(--warn);
+}
+.bulk-file strong .badge {
+  margin-left: 6px;
+  vertical-align: 1px;
+}

@@ -19,3 +19,8 @@ user-app/
 store/
 design.zip
 README (1).md
+
+# App source handed to the client; the app code stays out of this public repo.
+PromptLab-app-source.zip
+release-files/
+PromptLab-dashboard-source.zip
