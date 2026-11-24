@@ -110,6 +110,8 @@ export function createDemoApi(): Api {
       native_unit_id: "",
       interstitial_unit_id: "",
       app_open_unit_id: "",
+      rewarded_unit_id: "",
+      premium_unlock_minutes: 60,
       back_to_list_every_n: 3,
       generate_prompt_every_n: 1,
       category_tap_every_n: 1,

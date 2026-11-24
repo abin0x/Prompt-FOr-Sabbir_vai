@@ -26,6 +26,7 @@ const ads: AdConfig = {
   native_unit_id: unit,
   interstitial_unit_id: unit,
   app_open_unit_id: unit,
+  rewarded_unit_id: unit,
   ...RECOMMENDED_AD_LIMITS,
 };
 

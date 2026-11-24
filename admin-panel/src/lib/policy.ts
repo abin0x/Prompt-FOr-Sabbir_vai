@@ -17,12 +17,13 @@ export const AD_MINIMUMS = {
   category_tap_every_n: 1,
   saved_tab_every_n: 1,
   back_to_list_every_n: 3,
-  interstitial_min_gap_sec: 30,
+  interstitial_min_gap_sec: 25,
   native_every_n_cards: 4,
-  app_open_min_gap_hours: 4,
+  app_open_min_gap_hours: 3,
   native_first_after_cards: 2,
   grace_period_sec: 0,
   interstitial_max_per_session: 0,
+  premium_unlock_minutes: 1,
 } as const;
 
 /** Settings that pass every check, used by the "Recommended" button. */
@@ -37,12 +38,13 @@ export const RECOMMENDED_AD_LIMITS = {
   native_first_after_cards: 4,
   native_every_n_cards: 6,
   grace_period_sec: 60,
+  premium_unlock_minutes: 60,
 } as const;
 
 const UNIT_ID = /^ca-app-pub-\d{16}\/\d{10}$/;
 
 export function isValidUnitId(id: string): boolean {
-  return UNIT_ID.test(id.trim());
+  return UNIT_ID.test((id ?? "").trim());
 }
 
 export function isValidUrl(url: string): boolean {
@@ -147,7 +149,7 @@ export function runPolicyChecks(ads: AdConfig, app: AppSettings): PolicyCheck[] 
     fix: "ads",
     detail:
       ads.app_open_min_gap_hours < AD_MINIMUMS.app_open_min_gap_hours
-        ? `Every ${ads.app_open_min_gap_hours} hours is frequent. We recommend 4 or more.`
+        ? `Every ${ads.app_open_min_gap_hours} hours is frequent. We recommend 3 or more.`
         : `At most one every ${ads.app_open_min_gap_hours} hours, never in the first session.`,
   });
 
@@ -156,6 +158,8 @@ export function runPolicyChecks(ads: AdConfig, app: AppSettings): PolicyCheck[] 
     [ads.native_enabled, "Native", ads.native_unit_id],
     [ads.interstitial_enabled, "Interstitial", ads.interstitial_unit_id],
     [ads.app_open_enabled, "App open", ads.app_open_unit_id],
+    // Without a rewarded unit the app opens Premium with no ad at all.
+    [ads.ads_enabled, "Rewarded (Premium)", ads.rewarded_unit_id ?? ""],
   ];
   const invalid = slots
     .filter(([on, , id]) => on && !isValidUnitId(id))

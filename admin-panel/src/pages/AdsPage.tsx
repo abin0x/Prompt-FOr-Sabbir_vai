@@ -16,7 +16,8 @@ type UnitKey =
   | "banner_unit_id"
   | "native_unit_id"
   | "interstitial_unit_id"
-  | "app_open_unit_id";
+  | "app_open_unit_id"
+  | "rewarded_unit_id";
 type LimitKey = keyof typeof AD_MINIMUMS;
 
 const UNITS: { enabled: BoolKey; unit: UnitKey; label: string }[] = [
@@ -24,6 +25,8 @@ const UNITS: { enabled: BoolKey; unit: UnitKey; label: string }[] = [
   { enabled: "native_enabled", unit: "native_unit_id", label: "Native" },
   { enabled: "interstitial_enabled", unit: "interstitial_unit_id", label: "Interstitial" },
   { enabled: "app_open_enabled", unit: "app_open_unit_id", label: "App open" },
+  // Always needed while ads are on: it is the only way to open Premium items.
+  { enabled: "ads_enabled", unit: "rewarded_unit_id", label: "Rewarded (Premium)" },
 ];
 
 const PLACEMENTS: {
@@ -74,6 +77,7 @@ const NUMBER_LABELS: Partial<Record<LimitKey, string>> = {
   native_first_after_cards: "First ad after",
   native_every_n_cards: "Then one ad every",
   app_open_min_gap_hours: "Gap between ads",
+  premium_unlock_minutes: "Premium stays open for",
 };
 
 /** Formats that are on but have no usable ID, so show nothing with live ads. */
@@ -132,7 +136,13 @@ export function AdsPage({ api, go }: { api: Api; go: (page: Page) => void }) {
   useEffect(() => {
     api
       .getConfig("ads")
-      .then((value) => {
+      .then((loaded) => {
+        // Settings saved before Premium existed have no value for these two.
+        const value: AdConfig = {
+          rewarded_unit_id: "",
+          premium_unlock_minutes: RECOMMENDED_AD_LIMITS.premium_unlock_minutes,
+          ...(loaded as Partial<AdConfig>),
+        } as AdConfig;
         setConfig(value);
         setSaved(value);
         latest.current = value;
@@ -204,7 +214,10 @@ export function AdsPage({ api, go }: { api: Api; go: (page: Page) => void }) {
     if (config.app_open_enabled) {
       lines.push(`An app-open ad at most every ${config.app_open_min_gap_hours} hours.`);
     }
-    return lines.length ? lines : ["Every ad type is off, so no ads are shown."];
+    const premium = `Premium items ask the user to watch a rewarded ad, then stay open for ${config.premium_unlock_minutes} minutes.`;
+    return lines.length
+      ? [...lines, premium]
+      : ["Every ad type is off, so no ads are shown.", premium];
   }, [config]);
 
   const useLiveAds = async () => {
@@ -369,7 +382,7 @@ export function AdsPage({ api, go }: { api: Api; go: (page: Page) => void }) {
                 <div className="ad-format-list">
                   <FormatSection
                     label="Banner"
-                    description="A strip at the bottom of Home, Trending, category and detail screens."
+                    description="A strip at the bottom of Home, Premium, category and detail screens."
                     checked={config.banner_enabled}
                     disabled={!allOn}
                     needsUnit={needsUnit("banner_enabled", "banner_unit_id")}
@@ -463,6 +476,31 @@ export function AdsPage({ api, go }: { api: Api; go: (page: Page) => void }) {
                 >
                   Use recommended numbers
                 </button>
+              </Card>
+
+              <Card
+                title="Premium unlock"
+                description="Items in the Premium category open after the user chooses to watch a rewarded ad."
+              >
+                <div className="ad-numbers">
+                  {number(
+                    "premium_unlock_minutes",
+                    NUMBER_LABELS.premium_unlock_minutes!,
+                    "minutes",
+                    "after one ad (1 to 1440)",
+                  )}
+                </div>
+                {live && allOn && !isValidUnitId(config.rewarded_unit_id ?? "") && (
+                  <span className="badge fail">
+                    Needs a Rewarded unit ID, so Premium opens with no ad
+                  </span>
+                )}
+                {!live && (
+                  <p className="muted small">
+                    Test ads are on, so Google's sample rewarded ad is used. The
+                    Rewarded unit ID goes under AdMob unit IDs below.
+                  </p>
+                )}
               </Card>
 
               <details

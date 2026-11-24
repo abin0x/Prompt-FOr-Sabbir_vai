@@ -168,6 +168,10 @@ export interface AdConfig {
   native_unit_id: string;
   interstitial_unit_id: string;
   app_open_unit_id: string;
+  /** Rewarded ad that opens Premium items. */
+  rewarded_unit_id: string;
+  /** Minutes Premium stays open after one rewarded ad. */
+  premium_unlock_minutes: number;
   back_to_list_every_n: number;
   generate_prompt_every_n: number;
   category_tap_every_n: number;
