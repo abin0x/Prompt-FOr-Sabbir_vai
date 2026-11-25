@@ -65,8 +65,23 @@ export interface ImportItem {
   durationSec?: number | null;
   mediaBytes?: number;
   sourceName?: string;
+  /** The imported set it belongs to, which one switch puts live or hides. */
+  importBatch?: string;
+  /** Its place in the newest-first order. New items only. */
+  createdAt?: string;
   /** Also put it live. Needs a file and a prompt. */
   publish?: boolean;
+}
+
+/** A set of imported items, with what it holds. */
+export interface ImportBatch {
+  batch: string;
+  total: number;
+  live: number;
+  /** Items with a file and a prompt, which can go live. */
+  ready: number;
+  video_items: number;
+  image_items: number;
 }
 
 /** One per row sent, in the same order. */
@@ -270,6 +285,9 @@ export interface Api {
   matchSourceNames(names: string[]): Promise<SourceMatch[]>;
   /** Saves any number of rows; each succeeds or fails on its own. */
   importItems(items: ImportItem[]): Promise<ImportResult[]>;
+  importBatches(): Promise<ImportBatch[]>;
+  /** Puts a whole set live, or hides it. Items with no file or prompt stay hidden. */
+  setBatchLive(batch: string, live: boolean): Promise<{ changed: number; skipped: number }>;
 
   uploadFile(
     file: Blob,

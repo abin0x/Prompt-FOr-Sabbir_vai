@@ -5,6 +5,7 @@ import type {
   Category,
   ConfigMap,
   ContentReport,
+  ImportBatch,
   ImportItem,
   ImportResult,
   Overview,
@@ -31,6 +32,14 @@ function friendlyError(message: string): string {
     return "The title must be 1 to 120 characters.";
   }
   if (message.includes("invalid input syntax")) return "A value in this row is not valid.";
+  return message;
+}
+
+/** Before the site-import migration is applied, its functions do not exist. */
+function missingSetupError(message: string): string {
+  if (/import_batches|set_batch_live|schema cache|does not exist/i.test(message)) {
+    return "The database is not updated for website imports yet. Run supabase db push.";
+  }
   return message;
 }
 
@@ -248,6 +257,8 @@ export function createSupabaseApi(
           duration_sec: item.durationSec,
           media_bytes: item.mediaBytes,
           source_name: item.sourceName,
+          import_batch: item.importBatch,
+          created_at: item.createdAt,
           publish: item.publish,
         }));
         const { data, error } = await db.rpc("import_items", { p_items: rows });
@@ -266,6 +277,27 @@ export function createSupabaseApi(
         }
       }
       return results;
+    },
+    async importBatches() {
+      const { data, error } = await db.rpc("import_batches");
+      if (error) throw new Error(missingSetupError(error.message));
+      return ((data ?? []) as ImportBatch[]).map((row) => ({
+        batch: row.batch,
+        total: Number(row.total),
+        live: Number(row.live),
+        ready: Number(row.ready),
+        video_items: Number(row.video_items),
+        image_items: Number(row.image_items),
+      }));
+    },
+    async setBatchLive(batch, live) {
+      const { data, error } = await db.rpc("set_batch_live", {
+        p_batch: batch,
+        p_live: live,
+      });
+      if (error) throw new Error(missingSetupError(friendlyError(error.message)));
+      const result = (data ?? {}) as { changed?: number; skipped?: number };
+      return { changed: Number(result.changed ?? 0), skipped: Number(result.skipped ?? 0) };
     },
 
     async uploadFile(file, kind: UploadKind, contentType, onProgress) {

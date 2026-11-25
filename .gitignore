@@ -20,6 +20,11 @@ store/
 design.zip
 README (1).md
 
+# Prompt lists from the old websites, and what the import tool makes from them.
+/photo_prompts.json
+/video_prompts.json
+tools/site-import/out/
+
 # App source handed to the client; the app code stays out of this public repo.
 PromptLab-app-source.zip
 release-files/

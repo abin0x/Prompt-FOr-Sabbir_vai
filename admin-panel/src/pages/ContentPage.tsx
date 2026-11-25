@@ -3,6 +3,8 @@ import { Icon } from "../components/Icon";
 import { Alert, Card, PageHeader, useFeedback } from "../components/ui";
 import { BulkUpload } from "../components/BulkUpload";
 import { SheetImport } from "../components/SheetImport";
+import { ImportSets } from "../components/ImportSets";
+import { SiteImport } from "../components/SiteImport";
 import { VideoForm } from "../components/VideoForm";
 import type { Api, Category, VideoQuery, VideoRow, VideoSort } from "../lib/api";
 import {
@@ -47,6 +49,8 @@ export function ContentPage({
   const [editing, setEditing] = useState<Editing>({ mode: "closed" });
   const [bulk, setBulk] = useState(false);
   const [sheet, setSheet] = useState(false);
+  const [site, setSite] = useState(false);
+  const [setsKey, setSetsKey] = useState(0);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -75,7 +79,11 @@ export function ContentPage({
     localStorage.setItem("library-view", view);
   }, [view]);
 
+  // Only the newest request may fill the list, so a slow answer for an old
+  // filter never replaces the current one.
+  const latestLoad = useRef(0);
   const load = useCallback(async () => {
+    const ticket = ++latestLoad.current;
     setLoading(true);
     setError("");
     try {
@@ -83,20 +91,27 @@ export function ContentPage({
         api.listVideos(query),
         api.listCategories(),
       ]);
+      if (ticket !== latestLoad.current) return;
       setRows(list.rows);
       setTotal(list.total);
       setCategories(cats);
       setSelected(new Set());
     } catch (err) {
-      setError((err as Error).message);
+      if (ticket === latestLoad.current) setError((err as Error).message);
     } finally {
-      setLoading(false);
+      if (ticket === latestLoad.current) setLoading(false);
     }
   }, [api, query]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Drawers finish long after they opened; they reload with today's filters,
+  // not the ones in place when they started.
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  const reload = useCallback(() => loadRef.current(), []);
 
   // Wait for a pause in typing before searching, to save requests.
   useEffect(() => {
@@ -303,6 +318,10 @@ export function ContentPage({
         description={`${total} ${total === 1 ? "item" : "items"}`}
         actions={
           <>
+            <button className="button" onClick={() => setSite(true)}>
+              <Icon name="storage" size={16} />
+              Website import
+            </button>
             <button className="button" onClick={() => setSheet(true)}>
               <Icon name="rows" size={16} />
               Import sheet
@@ -320,6 +339,8 @@ export function ContentPage({
       />
 
       {error && <Alert kind="error">{error}</Alert>}
+
+      <ImportSets api={api} refreshKey={setsKey} onChanged={reload} />
 
       <Card flush>
         <div className="toolbar">
@@ -636,7 +657,7 @@ export function ContentPage({
           onClose={() => setBulk(false)}
           onFinished={async (message) => {
             toast(message);
-            await load();
+            await reload();
           }}
         />
       )}
@@ -648,7 +669,19 @@ export function ContentPage({
           onClose={() => setSheet(false)}
           onFinished={async (message) => {
             toast(message);
-            await load();
+            await reload();
+          }}
+        />
+      )}
+
+      {site && (
+        <SiteImport
+          api={api}
+          onClose={() => setSite(false)}
+          onFinished={async (message) => {
+            toast(message);
+            setSetsKey((key) => key + 1);
+            await reload();
           }}
         />
       )}

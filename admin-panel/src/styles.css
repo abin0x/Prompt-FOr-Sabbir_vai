@@ -1924,3 +1924,16 @@ input:disabled + .toggle {
   margin-left: 6px;
   vertical-align: 1px;
 }
+
+/* ----------------------------------------------------------- website import */
+
+.site-plan li + li {
+  margin-top: 6px;
+}
+.site-progress {
+  display: grid;
+  gap: 6px;
+}
+.import-sets .toggle-row + .toggle-row {
+  border-top: 1px solid var(--border);
+}

@@ -7,6 +7,7 @@ import type {
   ChecklistState,
   ConfigMap,
   ContentReport,
+  ImportBatch,
   ImportResult,
   Overview,
   VideoInput,
@@ -171,6 +172,8 @@ export function createDemoApi(): Api {
     created_at: new Date(Date.now() - (hours as number) * 3600000).toISOString(),
   }));
   let nextId = 100;
+  /** The imported set of each item, by id. */
+  const batchOf = new Map<string, string>();
 
   const wait = () => new Promise((resolve) => setTimeout(resolve, 120));
   const log = (action: string, target_type: string, target_label: string) =>
@@ -437,6 +440,8 @@ export function createDemoApi(): Api {
         if (item.durationSec !== undefined) row.duration_sec = item.durationSec;
         if (item.mediaBytes !== undefined) row.media_bytes = item.mediaBytes;
         if (item.sourceName !== undefined) row.source_name = item.sourceName;
+        if (item.importBatch !== undefined) batchOf.set(row.id, item.importBatch);
+        if (item.createdAt && !existing) row.created_at = item.createdAt;
         if (prompt) {
           prompts.set(row.id, prompt);
           row.has_prompt = true;
@@ -446,9 +451,55 @@ export function createDemoApi(): Api {
           row.publish_at = null;
         }
         if (!existing) rows.unshift(row);
-        log(existing ? "edited" : "created", "videos", row.title);
+        if (!item.importBatch) log(existing ? "edited" : "created", "videos", row.title);
         return { id: row.id };
       });
+    },
+    async importBatches() {
+      await wait();
+      const sets = new Map<string, ImportBatch>();
+      for (const row of rows) {
+        const batch = batchOf.get(row.id);
+        if (!batch) continue;
+        const set = sets.get(batch) ?? {
+          batch,
+          total: 0,
+          live: 0,
+          ready: 0,
+          video_items: 0,
+          image_items: 0,
+        };
+        set.total++;
+        if (row.is_published) set.live++;
+        if (row.media_path && row.has_prompt) set.ready++;
+        if (row.content_type === "video") set.video_items++;
+        else set.image_items++;
+        sets.set(batch, set);
+      }
+      return [...sets.values()].sort((a, b) => a.batch.localeCompare(b.batch));
+    },
+    async setBatchLive(batch, live) {
+      await wait();
+      let changed = 0;
+      let skipped = 0;
+      for (const row of rows) {
+        if (batchOf.get(row.id) !== batch) continue;
+        if (live && !row.is_published) {
+          if (row.media_path && row.has_prompt) {
+            row.is_published = true;
+            row.publish_at = null;
+            changed++;
+          } else {
+            skipped++;
+          }
+        } else if (!live && row.is_published) {
+          row.is_published = false;
+          row.publish_at = null;
+          changed++;
+        }
+      }
+      if (changed) log(live ? "published" : "hid", "videos", `${changed} items of ${batch}`);
+      return { changed, skipped };
     },
 
     async uploadFile(file, _kind, _contentType, onProgress) {
